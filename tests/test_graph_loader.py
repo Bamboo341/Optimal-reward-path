@@ -124,6 +124,19 @@ class TestNearestEdge:
         assert all(type(x) is int for x in (u, v, key))
 
 
+class TestNearestNode:
+    def test_snaps_to_closest_node(self, undirected_graph):
+        from src.graph_loader import nearest_node
+
+        assert nearest_node(undirected_graph, lat=34.9901, lng=135.7581) == 1
+        assert nearest_node(undirected_graph, lat=34.9909, lng=135.7589) == 3
+
+    def test_returns_python_int(self, undirected_graph):
+        from src.graph_loader import nearest_node
+
+        assert type(nearest_node(undirected_graph, lat=34.99, lng=135.758)) is int
+
+
 class TestEdgeRoadName:
     def test_str_name(self, undirected_graph):
         assert edge_road_name(undirected_graph, 1, 2, 0) == "四条通"

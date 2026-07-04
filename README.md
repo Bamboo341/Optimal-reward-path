@@ -36,6 +36,6 @@ pytest tests/
 
 - [x] Phase 0: 基盤（グラフ取得・graphmlキャッシュ・無向化・config）
 - [x] Phase 1: 報酬設定機能（地図クリック→エッジ特定→報酬設定・JSON永続化）
-- [ ] Phase 2: モードR探索（コア）
+- [x] Phase 2: モードR探索（メタグラフ・ビットマスクDP・経路復元・候補表示）
 - [ ] Phase 3: 拡張探索
 - [ ] Phase 4: 仕上げ

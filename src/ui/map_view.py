@@ -16,6 +16,9 @@ from src.rewards import RewardEdge
 REWARD_COLOR = "red"
 PREVIEW_COLOR = "blue"
 
+# 候補経路の色（候補1〜5。報酬エッジの赤と紛れない色を選ぶ）
+ROUTE_COLORS = ["#1f77b4", "#2ca02c", "#9467bd", "#ff7f0e", "#17becf"]
+
 
 def graph_center(G: nx.MultiGraph) -> tuple[float, float]:
     """全ノードの重心 (lat, lng) を返す。"""
@@ -71,4 +74,69 @@ def build_reward_map(
             tooltip="選択中のエッジ",
         ).add_to(m)
 
+    return m
+
+
+def route_latlngs(G: nx.MultiGraph, nodes, edges) -> list[tuple[float, float]]:
+    """経路（ノード列＋エッジ列）を連続した描画座標列に変換する。
+
+    各エッジの geometry を通過方向に向きを揃えて連結する。
+    """
+    pts: list[tuple[float, float]] = []
+    for (a, _b), (u, v, key) in zip(zip(nodes, nodes[1:]), edges):
+        seg = edge_latlngs(G, u, v, key)
+        start = (G.nodes[a]["y"], G.nodes[a]["x"])
+        d_head = (seg[0][0] - start[0]) ** 2 + (seg[0][1] - start[1]) ** 2
+        d_tail = (seg[-1][0] - start[0]) ** 2 + (seg[-1][1] - start[1]) ** 2
+        if d_tail < d_head:
+            seg = seg[::-1]
+        pts.extend(seg if not pts else seg[1:])
+    return pts
+
+
+def build_route_map(
+    G: nx.MultiGraph,
+    rewards: list[RewardEdge],
+    s: int | None = None,
+    t: int | None = None,
+    candidates=(),
+    center: tuple[float, float] | None = None,
+    zoom: int = 15,
+) -> folium.Map:
+    """経路探索画面の地図を構築する。
+
+    報酬エッジ（赤）の上に、候補経路を色分けした FeatureGroup として重畳する。
+    レイヤーコントロールで候補ごとに表示/非表示を切替できる（SPEC §7.2）。
+    """
+    m = build_reward_map(G, rewards, center=center, zoom=zoom)
+
+    if s is not None:
+        folium.Marker(
+            (G.nodes[s]["y"], G.nodes[s]["x"]),
+            tooltip=f"出発点（ノード {s}）",
+            icon=folium.Icon(color="green", icon="play"),
+        ).add_to(m)
+    if t is not None:
+        folium.Marker(
+            (G.nodes[t]["y"], G.nodes[t]["x"]),
+            tooltip=f"到着点（ノード {t}）",
+            icon=folium.Icon(color="darkred", icon="stop"),
+        ).add_to(m)
+
+    for i, cand in enumerate(candidates):
+        color = ROUTE_COLORS[i % len(ROUTE_COLORS)]
+        group = folium.FeatureGroup(
+            name=f"候補{i + 1}: 報酬{cand.reward} / {cand.length:.0f}m"
+        )
+        folium.PolyLine(
+            route_latlngs(G, cand.nodes, cand.edges),
+            color=color,
+            weight=5,
+            opacity=0.8,
+            tooltip=f"候補{i + 1}: 報酬{cand.reward} / {cand.length:.0f}m",
+        ).add_to(group)
+        group.add_to(m)
+
+    if candidates:
+        folium.LayerControl(collapsed=False).add_to(m)
     return m

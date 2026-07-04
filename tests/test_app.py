@@ -29,8 +29,40 @@ def test_reward_page_renders(patched_graph):
     assert any("地図をクリック" in str(el.value) for el in at.sidebar.info)
 
 
-def test_mode_switch_to_route_search(patched_graph):
+def test_route_search_page_renders(patched_graph):
     at = AppTest.from_file(APP_PATH, default_timeout=30).run()
     at.sidebar.radio[0].set_value("経路探索").run()
     assert not at.exception
-    assert any("Phase 2" in str(el.value) for el in at.info)
+    # 出発点・到着点が未設定なので探索実行は無効、案内が表示される
+    assert any("探索実行" in str(b.label) for b in at.sidebar.button)
+    assert any("未設定" in str(el.value) for el in at.sidebar.caption)
+
+
+def test_route_search_executes_solver(patched_graph):
+    at = AppTest.from_file(APP_PATH, default_timeout=30).run()
+    at.sidebar.radio[0].set_value("経路探索").run()
+    # 地図クリックの代わりに session_state で出発点・到着点を設定
+    at.session_state["route_start_node"] = 1
+    at.session_state["route_end_node"] = 3
+    at.run()
+    button = next(b for b in at.sidebar.button if "探索実行" in str(b.label))
+    button.click().run()
+    assert not at.exception
+    assert len(at.dataframe) == 1  # 候補経路の表が表示される
+
+
+def test_route_search_shows_error_when_infeasible(patched_graph):
+    at = AppTest.from_file(APP_PATH, default_timeout=30).run()
+    at.sidebar.radio[0].set_value("経路探索").run()
+    at.session_state["route_start_node"] = 1
+    at.session_state["route_end_node"] = 3
+    at.run()
+    # 最短距離より小さい距離上限を指定 → エラー表示
+    limit_input = next(
+        n for n in at.sidebar.number_input if "距離上限" in str(n.label)
+    )
+    limit_input.set_value(100).run()
+    button = next(b for b in at.sidebar.button if "探索実行" in str(b.label))
+    button.click().run()
+    assert not at.exception
+    assert any("実行可能解がありません" in str(e.value) for e in at.error)

@@ -1,14 +1,13 @@
 """Streamlit エントリポイント。
 
 サイドバーで「報酬設定」「経路探索」の2モードを切り替える（docs/SPEC.md §7）。
-経路探索は Phase 2 以降で実装する。
 """
 
 import streamlit as st
 
 from src.config import load_config
 from src.graph_loader import GraphLoadError, load_graph
-from src.ui import reward_editor
+from src.ui import reward_editor, route_search
 
 
 @st.cache_resource(show_spinner="道路ネットワークを読み込み中...")
@@ -38,7 +37,7 @@ def main() -> None:
     if mode == "報酬設定":
         reward_editor.render(G, config)
     else:
-        st.info("経路探索は Phase 2 以降で実装予定です。")
+        route_search.render(G, config)
 
 
 if __name__ == "__main__":
