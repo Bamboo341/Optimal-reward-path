@@ -35,7 +35,7 @@ pytest tests/
 ## 実装状況
 
 - [x] Phase 0: 基盤（グラフ取得・graphmlキャッシュ・無向化・config）
-- [ ] Phase 1: 報酬設定機能
+- [x] Phase 1: 報酬設定機能（地図クリック→エッジ特定→報酬設定・JSON永続化）
 - [ ] Phase 2: モードR探索（コア）
 - [ ] Phase 3: 拡張探索
 - [ ] Phase 4: 仕上げ

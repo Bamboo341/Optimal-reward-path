@@ -1,13 +1,14 @@
 """Streamlit エントリポイント。
 
-Phase 0 時点ではグラフ読込の確認画面のみ。報酬設定・経路探索の画面は
-Phase 1 以降で追加する（docs/SPEC.md §7, §10）。
+サイドバーで「報酬設定」「経路探索」の2モードを切り替える（docs/SPEC.md §7）。
+経路探索は Phase 2 以降で実装する。
 """
 
 import streamlit as st
 
 from src.config import load_config
 from src.graph_loader import GraphLoadError, load_graph
+from src.ui import reward_editor
 
 
 @st.cache_resource(show_spinner="道路ネットワークを読み込み中...")
@@ -28,11 +29,16 @@ def main() -> None:
         st.stop()
         return
 
-    st.success(f"グラフ読込完了: {config.place}")
-    col1, col2 = st.columns(2)
-    col1.metric("ノード数", f"{G.number_of_nodes():,}")
-    col2.metric("エッジ数", f"{G.number_of_edges():,}")
-    st.caption("Phase 0: 基盤のみ。報酬設定・経路探索は今後のPhaseで追加予定。")
+    mode = st.sidebar.radio("画面", ("報酬設定", "経路探索"))
+    st.sidebar.caption(
+        f"{config.place}\nノード {G.number_of_nodes():,} / エッジ {G.number_of_edges():,}"
+    )
+    st.sidebar.divider()
+
+    if mode == "報酬設定":
+        reward_editor.render(G, config)
+    else:
+        st.info("経路探索は Phase 2 以降で実装予定です。")
 
 
 if __name__ == "__main__":

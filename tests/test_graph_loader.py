@@ -2,29 +2,19 @@ from pathlib import Path
 
 import networkx as nx
 import pytest
+from conftest import make_synthetic_graph
+from shapely.geometry import LineString
 
 from src import graph_loader
 from src.graph_loader import (
     GraphLoadError,
+    edge_road_name,
     graph_cache_path,
     load_graph,
+    nearest_edge,
     place_slug,
     to_undirected,
 )
-
-
-def make_synthetic_graph() -> nx.MultiDiGraph:
-    """OSMnx互換の最小限の属性を持つ合成有向グラフ。"""
-    G = nx.MultiDiGraph(crs="epsg:4326", simplified=True)
-    coords = {1: (135.758, 34.990), 2: (135.759, 34.990), 3: (135.759, 34.991)}
-    for node, (x, y) in coords.items():
-        G.add_node(node, x=x, y=y)
-    # 双方向道路（往復2本の有向エッジ）→ 無向化で1本に統合される
-    G.add_edge(1, 2, key=0, osmid=100, length=100.0)
-    G.add_edge(2, 1, key=0, osmid=100, length=100.0)
-    # 一方通行道路 → 無向化でそのまま1本になる
-    G.add_edge(2, 3, key=0, osmid=101, length=150.0, oneway=True)
-    return G
 
 
 class TestPlaceSlug:
@@ -49,11 +39,11 @@ class TestToUndirected:
         G = to_undirected(make_synthetic_graph())
         assert not G.is_directed()
         assert isinstance(G, nx.MultiGraph)
-        assert G.number_of_nodes() == 3
-        # 双方向1本＋一方通行1本 = 無向エッジ2本
-        assert G.number_of_edges() == 2
-        assert G.has_edge(1, 2)
-        assert G.has_edge(2, 3)
+        assert G.number_of_nodes() == 4
+        # 双方向2本は往復が統合され、一方通行2本と合わせて無向エッジ4本
+        assert G.number_of_edges() == 4
+        for u, v in [(1, 2), (2, 3), (3, 4), (1, 4)]:
+            assert G.has_edge(u, v)
 
     def test_undirected_passthrough(self):
         G = nx.MultiGraph(crs="epsg:4326")
@@ -92,15 +82,24 @@ class TestLoadGraph:
         assert set(G2.nodes) == set(G1.nodes)
         assert G2.number_of_edges() == G1.number_of_edges()
 
-    def test_cache_preserves_length_as_float(self, tmp_path, fetch_mock):
+    def test_cache_preserves_attributes(self, tmp_path, fetch_mock):
         place = "Test Place"
         load_graph(place, data_dir=tmp_path)
         G = load_graph(place, data_dir=tmp_path)
 
-        lengths = {(u, v): d["length"] for u, v, d in G.edges(data=True)}
-        assert lengths[(1, 2)] == pytest.approx(100.0)
-        assert lengths[(2, 3)] == pytest.approx(150.0)
+        lengths = {
+            tuple(sorted((u, v))): d["length"] for u, v, d in G.edges(data=True)
+        }
+        assert lengths == {
+            (1, 2): pytest.approx(100.0),
+            (2, 3): pytest.approx(150.0),
+            (3, 4): pytest.approx(120.0),
+            (1, 4): pytest.approx(110.0),
+        }
         assert all(isinstance(x, float) for x in lengths.values())
+        # geometry 属性も graphml 往復で保持される
+        geom = G.get_edge_data(3, 4, 0).get("geometry")
+        assert isinstance(geom, LineString)
 
     def test_fetch_failure_raises_graph_load_error(self, tmp_path, monkeypatch):
         def broken(*args, **kwargs):
@@ -109,3 +108,32 @@ class TestLoadGraph:
         monkeypatch.setattr(graph_loader.ox, "graph_from_place", broken)
         with pytest.raises(GraphLoadError, match="取得に失敗"):
             load_graph("Nowhere", data_dir=tmp_path)
+
+
+class TestNearestEdge:
+    def test_finds_clicked_edge(self, undirected_graph):
+        # エッジ 1-2（東西の道路）の中点近くをクリック
+        assert nearest_edge(undirected_graph, lat=34.9901, lng=135.7585) == (1, 2, 0)
+        # エッジ 2-3（南北の道路）の中点近く
+        assert nearest_edge(undirected_graph, lat=34.9905, lng=135.7591) == (2, 3, 0)
+
+    def test_returns_normalized_python_ints(self, undirected_graph):
+        # エッジ 1-4（西端の南北道路、有向グラフでは 4→1 として追加）の中点近く
+        u, v, key = nearest_edge(undirected_graph, lat=34.9905, lng=135.7579)
+        assert (u, v, key) == (1, 4, 0)
+        assert all(type(x) is int for x in (u, v, key))
+
+
+class TestEdgeRoadName:
+    def test_str_name(self, undirected_graph):
+        assert edge_road_name(undirected_graph, 1, 2, 0) == "四条通"
+
+    def test_list_name_joined(self, undirected_graph):
+        assert edge_road_name(undirected_graph, 2, 3, 0) == "高倉通・Takakura"
+
+    def test_missing_name_is_empty(self, undirected_graph):
+        assert edge_road_name(undirected_graph, 3, 4, 0) == ""
+
+    def test_missing_edge_raises(self, undirected_graph):
+        with pytest.raises(KeyError):
+            edge_road_name(undirected_graph, 1, 3, 0)

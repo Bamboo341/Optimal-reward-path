@@ -60,6 +60,25 @@ def load_graph(
     return to_undirected(G)
 
 
+def nearest_edge(G: nx.MultiGraph, lat: float, lng: float) -> tuple[int, int, int]:
+    """地点 (lat, lng) の最近傍エッジを u < v 正規化した (u, v, key) で返す（SPEC §7.1）。"""
+    u, v, key = ox.distance.nearest_edges(G, X=lng, Y=lat)
+    return (int(u), int(v), int(key)) if u <= v else (int(v), int(u), int(key))
+
+
+def edge_road_name(G: nx.MultiGraph, u: int, v: int, key: int) -> str:
+    """エッジの道路名を返す。名称がなければ空文字列。"""
+    data = G.get_edge_data(u, v, key)
+    if data is None:
+        raise KeyError(f"エッジが存在しません: {(u, v, key)}")
+    name = data.get("name")
+    if name is None or name == "":
+        return ""
+    if isinstance(name, (list, tuple)):
+        return "・".join(str(n) for n in name)
+    return str(name)
+
+
 def _fetch_graph(place: str, network_type: str) -> nx.MultiDiGraph:
     try:
         return ox.graph_from_place(place, network_type=network_type, simplify=True)
