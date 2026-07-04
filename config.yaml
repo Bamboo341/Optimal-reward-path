@@ -1,0 +1,20 @@
+# アプリ設定（docs/SPEC.md §3, §5, §9 参照）
+
+# 対象地域。変更するだけで京都市全域等に切替可能（SPEC §3）
+place: "Shimogyo-ku, Kyoto, Japan"
+
+# OSMnx の network_type（SPEC §3 で "all" 固定）
+network_type: "all"
+
+# |R| がこの値以下ならビットマスクDPで厳密解、超過時はヒューリスティック（SPEC §5.2）
+n_exact: 14
+
+# ヒューリスティック探索の時間上限（秒）（SPEC §8）
+time_limit_sec: 90
+
+# 候補経路数 K の既定値（SPEC §5.4）
+k_default: 3
+
+# データ保存先ディレクトリ
+data_dir: "data"
+output_dir: "output"

@@ -1,0 +1,71 @@
+"""OSM道路ネットワークの取得・graphmlキャッシュ・無向化（SPEC.md §3 / Phase 0）。
+
+キャッシュには無向化済みのグラフを保存する。これにより2回目以降の読込は
+graphml のロードのみで完了し、受入基準（キャッシュから3秒以内）を満たしやすい。
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+import networkx as nx
+import osmnx as ox
+
+
+class GraphLoadError(RuntimeError):
+    """OSMからのグラフ新規取得に失敗したときに送出する（SPEC.md §12）。"""
+
+
+def place_slug(place: str) -> str:
+    """place 文字列をファイル名に使えるスラッグへ変換する。
+
+    例: "Shimogyo-ku, Kyoto, Japan" -> "shimogyo_ku_kyoto_japan"
+    """
+    slug = re.sub(r"[^a-z0-9]+", "_", place.lower()).strip("_")
+    if not slug:
+        raise ValueError(f"place からスラッグを生成できません: {place!r}")
+    return slug
+
+
+def graph_cache_path(place: str, data_dir: str | Path = "data") -> Path:
+    return Path(data_dir) / f"graph_{place_slug(place)}.graphml"
+
+
+def to_undirected(G: nx.MultiDiGraph | nx.MultiGraph) -> nx.MultiGraph:
+    """有向 MultiDiGraph を無向 MultiGraph に変換する。無向ならそのまま返す。"""
+    if not G.is_directed():
+        return G
+    return ox.convert.to_undirected(G)
+
+
+def load_graph(
+    place: str,
+    network_type: str = "all",
+    data_dir: str | Path = "data",
+) -> nx.MultiGraph:
+    """place の道路ネットワークを無向 MultiGraph として返す。
+
+    キャッシュ（data/graph_{place_slug}.graphml）があればローカル読込、
+    なければ OSM から取得して無向化のうえキャッシュに保存する。
+    """
+    path = graph_cache_path(place, data_dir)
+    if path.exists():
+        G = ox.io.load_graphml(path)
+    else:
+        G = to_undirected(_fetch_graph(place, network_type))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        ox.io.save_graphml(G, path)
+    # 旧形式（有向）のキャッシュにも耐えるよう常に無向化して返す
+    return to_undirected(G)
+
+
+def _fetch_graph(place: str, network_type: str) -> nx.MultiDiGraph:
+    try:
+        return ox.graph_from_place(place, network_type=network_type, simplify=True)
+    except Exception as exc:
+        raise GraphLoadError(
+            f"OSMからのグラフ取得に失敗しました（place={place!r}）。"
+            "初回取得にはネットワーク接続が必要です。"
+            "接続を確認するか、既存の graphml キャッシュを data/ に配置してください。"
+        ) from exc
