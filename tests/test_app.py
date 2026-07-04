@@ -51,6 +51,56 @@ def test_route_search_executes_solver(patched_graph):
     assert len(at.dataframe) == 1  # 候補経路の表が表示される
 
 
+def test_corrupted_rewards_file_shows_error_not_crash(patched_graph, monkeypatch, tmp_path):
+    import src.config
+    from src.config import Config
+    from src.rewards import rewards_path
+
+    config = Config(data_dir=str(tmp_path), output_dir=str(tmp_path / "out"))
+    monkeypatch.setattr(src.config, "load_config", lambda *a, **k: config)
+    rewards_path(config.place, tmp_path).write_text("{ こわれた", encoding="utf-8")
+
+    at = AppTest.from_file(APP_PATH, default_timeout=30).run()
+    assert not at.exception
+    assert any("壊れて" in str(e.value) for e in at.error)
+
+
+def test_broken_config_shows_error_not_crash(monkeypatch):
+    import src.config
+
+    def broken(*a, **k):
+        raise ValueError("不明な設定キーがあります: ['plce']")
+
+    monkeypatch.setattr(src.config, "load_config", broken)
+    at = AppTest.from_file(APP_PATH, default_timeout=30).run()
+    assert not at.exception
+    assert any("config.yaml" in str(e.value) for e in at.error)
+
+
+def test_geojson_export_from_route_page(patched_graph, monkeypatch, tmp_path):
+    import src.config
+    from src.config import Config
+
+    out_dir = tmp_path / "out"
+    config = Config(data_dir=str(tmp_path), output_dir=str(out_dir))
+    monkeypatch.setattr(src.config, "load_config", lambda *a, **k: config)
+
+    at = AppTest.from_file(APP_PATH, default_timeout=30).run()
+    at.sidebar.radio[0].set_value("経路探索").run()
+    at.session_state["route_start_node"] = 1
+    at.session_state["route_end_node"] = 3
+    at.run()
+    search = next(b for b in at.sidebar.button if "探索実行" in str(b.label))
+    search.click().run()
+    export = next(b for b in at.main.button if "GeoJSON" in str(b.label))
+    export.click().run()
+
+    assert not at.exception
+    files = list(out_dir.glob("*.geojson"))
+    assert len(files) == 1
+    assert any("エクスポートしました" in str(el.value) for el in at.success)
+
+
 def test_route_search_shows_error_when_infeasible(patched_graph):
     at = AppTest.from_file(APP_PATH, default_timeout=30).run()
     at.sidebar.radio[0].set_value("経路探索").run()

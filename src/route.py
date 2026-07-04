@@ -128,6 +128,40 @@ def recount_reward(
     return sum(r.reward for r in ordered), ordered
 
 
+def edge_latlngs(G: nx.MultiGraph, u: int, v: int, key: int) -> list[tuple[float, float]]:
+    """エッジの描画用座標列 [(lat, lng), ...] を返す。
+
+    geometry 属性があればその形状、なければ両端ノードを結ぶ直線。
+    """
+    data = G.get_edge_data(u, v, key)
+    if data is None:
+        raise KeyError(f"エッジが存在しません: {(u, v, key)}")
+    geom = data.get("geometry")
+    if geom is not None:
+        return [(lat, lng) for lng, lat in geom.coords]
+    return [(G.nodes[u]["y"], G.nodes[u]["x"]), (G.nodes[v]["y"], G.nodes[v]["x"])]
+
+
+def route_latlngs(G: nx.MultiGraph, nodes, edges) -> list[tuple[float, float]]:
+    """経路（ノード列＋エッジ列）を連続した座標列 [(lat, lng), ...] に変換する。
+
+    各エッジの geometry を通過方向に向きを揃えて連結する。
+    エッジのない経路（s=t の直行など）はノード座標のみを返す。
+    """
+    if not edges:
+        return [(G.nodes[n]["y"], G.nodes[n]["x"]) for n in nodes]
+    pts: list[tuple[float, float]] = []
+    for (a, _b), (u, v, key) in zip(zip(nodes, nodes[1:]), edges):
+        seg = edge_latlngs(G, u, v, key)
+        start = (G.nodes[a]["y"], G.nodes[a]["x"])
+        d_head = (seg[0][0] - start[0]) ** 2 + (seg[0][1] - start[1]) ** 2
+        d_tail = (seg[-1][0] - start[0]) ** 2 + (seg[-1][1] - start[1]) ** 2
+        if d_tail < d_head:
+            seg = seg[::-1]
+        pts.extend(seg if not pts else seg[1:])
+    return pts
+
+
 def validate_route(
     G: nx.MultiGraph,
     route: RouteCandidate,

@@ -16,7 +16,7 @@ from streamlit_folium import st_folium
 
 from src.config import Config
 from src.graph_loader import edge_road_name, nearest_edge
-from src.rewards import RewardStore, rewards_path
+from src.rewards import RewardsFileError, RewardStore, rewards_path
 from src.ui.map_view import build_reward_map, graph_center
 
 _PREVIEW_KEY = "reward_preview_edge"
@@ -27,9 +27,13 @@ _ZOOM_KEY = "reward_map_zoom"
 def render(G: nx.MultiGraph, config: Config) -> None:
     st.header("報酬設定")
 
-    store, skipped = RewardStore.open(
-        rewards_path(config.place, config.data_dir), config.place, graph=G
-    )
+    try:
+        store, skipped = RewardStore.open(
+            rewards_path(config.place, config.data_dir), config.place, graph=G
+        )
+    except RewardsFileError as exc:
+        st.error(f"{exc}\n\nファイルを修正または削除してから再読み込みしてください。")
+        return
     if skipped:
         ids = ", ".join(str(r.edge_id) for r in skipped)
         st.warning(
