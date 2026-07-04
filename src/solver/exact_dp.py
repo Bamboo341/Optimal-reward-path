@@ -34,6 +34,29 @@ def _ends(r: RewardEdge, o: int) -> tuple[int, int]:
     return (r.u, r.v) if o == 0 else (r.v, r.u)
 
 
+def distance_tables(meta: MetaGraph, rewards: list[RewardEdge], s: int, t: int):
+    """DP・ヒューリスティックが共用するメタ距離テーブルを前計算する。
+
+    返り値: (d_s_in, d_out_t, d_conn)
+    - d_s_in[j][o]: s から報酬エッジ j の入口まで
+    - d_out_t[i][o]: 報酬エッジ i の出口から t まで
+    - d_conn[i][o][j][o2]: i の出口から j の入口まで
+    """
+    d_s_in = [[meta.d(s, _ends(r, o)[0]) for o in (0, 1)] for r in rewards]
+    d_out_t = [[meta.d(_ends(r, o)[1], t) for o in (0, 1)] for r in rewards]
+    d_conn = [
+        [
+            [
+                [meta.d(_ends(ri, o)[1], _ends(rj, o2)[0]) for o2 in (0, 1)]
+                for rj in rewards
+            ]
+            for o in (0, 1)
+        ]
+        for ri in rewards
+    ]
+    return d_s_in, d_out_t, d_conn
+
+
 def solve_exact(
     meta: MetaGraph,
     rewards: list[RewardEdge],
@@ -52,20 +75,7 @@ def solve_exact(
         return []
 
     # メタ距離を配列に前計算（DP内側ループの辞書引きを避ける）
-    # d_s_in[j][o]: s から j の入口まで / d_out_t[i][o]: i の出口から t まで
-    # d_conn[i][o][j][o2]: i の出口から j の入口まで
-    d_s_in = [[meta.d(s, _ends(r, o)[0]) for o in (0, 1)] for r in rewards]
-    d_out_t = [[meta.d(_ends(r, o)[1], t) for o in (0, 1)] for r in rewards]
-    d_conn = [
-        [
-            [
-                [meta.d(_ends(ri, o)[1], _ends(rj, o2)[0]) for o2 in (0, 1)]
-                for rj in rewards
-            ]
-            for o in (0, 1)
-        ]
-        for ri in rewards
-    ]
+    d_s_in, d_out_t, d_conn = distance_tables(meta, rewards, s, t)
 
     size = 1 << n
     dp = [[[INF, INF] for _ in range(n)] for _ in range(size)]

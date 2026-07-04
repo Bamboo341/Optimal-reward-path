@@ -255,16 +255,7 @@ class TestSolveCandidates:
         for c in cands:
             validate_route(G, c, s=0, t=24, limit=1400.0)
 
-    def test_too_many_rewards_raises_until_phase3(self):
-        G = grid_graph(4)
-        many = [
-            reward(u, v, 1, key=0)
-            for u, v in [(0, 1), (1, 2), (2, 3), (4, 5), (5, 6), (6, 7)]
-        ]
-        with pytest.raises(SolverError, match="N_exact"):
-            solve(G, many, s=0, t=15, limit=5000.0, n_exact=3)
-
-    def test_mode_s_not_implemented_yet(self):
+    def test_unknown_mode_raises(self):
         G = grid_graph(3)
-        with pytest.raises(SolverError, match="未実装"):
-            solve(G, [], s=0, t=8, limit=1000.0, mode="S")
+        with pytest.raises(SolverError, match="未知のモード"):
+            solve(G, [], s=0, t=8, limit=1000.0, mode="X")

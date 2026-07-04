@@ -45,7 +45,12 @@ def render(G: nx.MultiGraph, config: Config) -> None:
         limit = st.number_input(
             "距離上限 L（メートル）", min_value=100, value=5000, step=100
         )
-        st.radio("モード", ("再訪許可（歩道）",), help="再訪禁止（小道）は Phase 3 で追加予定")
+        mode_label = st.radio(
+            "モード",
+            ("再訪許可（歩道）", "再訪禁止（小道）"),
+            help="再訪禁止では同一の道路エッジを2度通らない経路のみを探索します",
+        )
+        mode = "R" if mode_label.startswith("再訪許可") else "S"
         k = st.slider("候補数 K", min_value=1, max_value=5, value=config.k_default)
         run = st.button(
             "探索実行",
@@ -55,7 +60,7 @@ def render(G: nx.MultiGraph, config: Config) -> None:
         )
 
     if run:
-        _run_search(G, store, s, t, float(limit), int(k), config)
+        _run_search(G, store, s, t, float(limit), int(k), mode, config)
 
     candidates = st.session_state.get(_RESULT_KEY, [])
     m = build_route_map(
@@ -79,12 +84,20 @@ def render(G: nx.MultiGraph, config: Config) -> None:
     _render_result_table(candidates, st.session_state.get(_LIMIT_KEY))
 
 
-def _run_search(G, store, s, t, limit, k, config) -> None:
+def _run_search(G, store, s, t, limit, k, mode, config) -> None:
     rewards = store.all()
     try:
         with st.spinner("経路を探索中..."):
             candidates = solve(
-                G, rewards, s, t, limit, k=k, n_exact=config.n_exact
+                G,
+                rewards,
+                s,
+                t,
+                limit,
+                k=k,
+                n_exact=config.n_exact,
+                mode=mode,
+                time_limit_sec=config.time_limit_sec,
             )
     except SolverError as exc:
         st.session_state[_RESULT_KEY] = []

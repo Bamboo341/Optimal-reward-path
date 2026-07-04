@@ -5,9 +5,11 @@ from __future__ import annotations
 import networkx as nx
 
 from src.rewards import RewardEdge
-from src.route import RouteCandidate, build_route
+from src.route import RouteCandidate, RouteError, build_route, validate_route
 from src.solver.exact_dp import PlannedSolution, solve_exact
+from src.solver.heuristic import solve_heuristic
 from src.solver.metagraph import MetaGraph, build_metagraph
+from src.solver.mode_s import build_route_mode_s
 
 EPS = 1e-6
 
@@ -25,18 +27,23 @@ def solve(
     k: int = 3,
     n_exact: int = 14,
     mode: str = "R",
+    time_limit_sec: float = 90.0,
+    seed: int = 0,
 ) -> list[RouteCandidate]:
     """s から t への距離上限 limit の報酬最大化経路を上位 k 件返す。
 
-    候補は回収報酬エッジ集合が互いに異なるものだけを採用する（SPEC §5.4）。
-    実行可能解が存在しない（s-t 最短距離 > limit）場合は SolverError。
+    - 回収可能な報酬エッジ数が n_exact 以下ならビットマスクDP（厳密解）、
+      超えるならヒューリスティック（time_limit_sec で打ち切り）
+    - mode="R": 再訪許可（歩道） / mode="S": 再訪禁止（小道、エッジ重複なし）
+    - 候補は回収報酬エッジ集合が互いに異なるものだけを採用する（SPEC §5.4）
+    - 実行可能解が存在しない（s-t 最短距離 > limit）場合は SolverError
     """
     if s not in G:
         raise SolverError(f"出発ノード {s} がグラフに存在しません")
     if t not in G:
         raise SolverError(f"到着ノード {t} がグラフに存在しません")
-    if mode != "R":
-        raise SolverError(f"モード {mode!r} は未実装です（Phase 3 で対応予定）")
+    if mode not in ("R", "S"):
+        raise SolverError(f"未知のモードです: {mode!r}")
 
     meta = build_metagraph(G, s, t, rewards)
     direct = meta.d(s, t)
@@ -48,15 +55,27 @@ def solve(
 
     # 距離上限内で回収し得ない報酬エッジを除外してマスク空間を削減する
     usable = _usable_rewards(G, meta, rewards, s, t, limit)
-    if len(usable) > n_exact:
-        raise SolverError(
-            f"回収可能な報酬エッジが {len(usable)} 本あり、厳密解の上限 "
-            f"N_exact={n_exact} を超えています（Phase 3 のヒューリスティックで対応予定）"
-        )
-
     rewards_sub = [r for r, _ in usable]
     lengths_sub = [l for _, l in usable]
-    planned = solve_exact(meta, rewards_sub, lengths_sub, s, t, limit, k=k)
+
+    # モードSは trail 構築で計画が没になり得るため、計画を多めに用意する
+    k_plans = k if mode == "R" else max(k * 3, k + 2)
+    if len(rewards_sub) <= n_exact:
+        planned = solve_exact(
+            meta, rewards_sub, lengths_sub, s, t, limit, k=k_plans
+        )
+    else:
+        planned = solve_heuristic(
+            meta,
+            rewards_sub,
+            lengths_sub,
+            s,
+            t,
+            limit,
+            k=k_plans,
+            time_limit_sec=time_limit_sec,
+            seed=seed,
+        )
     # 直行解（報酬エッジ回収なし）も常に候補に含める
     planned.append(
         PlannedSolution(mask=0, order=(), planned_length=direct, planned_reward=0)
@@ -65,7 +84,17 @@ def solve(
     candidates: list[RouteCandidate] = []
     seen: set[frozenset] = set()
     for plan in planned:
-        route = build_route(G, meta, rewards_sub, plan.order, s, t)
+        if mode == "R":
+            route = build_route(G, meta, rewards_sub, plan.order, s, t)
+        else:
+            route = build_route_mode_s(G, rewards_sub, plan.order, s, t, limit)
+            if route is None:
+                continue
+            try:
+                # SPEC §5.3: trail 条件と距離制約を検証してから採用する
+                validate_route(G, route, s, t, limit, forbid_repeated_edges=True)
+            except RouteError:
+                continue
         collected_ids = frozenset(r.edge_id for r in route.collected)
         # 報酬再集計後に回収集合が重複した候補は最良の1件に統合（SPEC §5.4）
         if collected_ids in seen:
