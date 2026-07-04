@@ -26,6 +26,10 @@ FORMAT_VERSION = 1
 EdgeId = tuple[int, int, int]
 
 
+class RewardsFileError(RuntimeError):
+    """報酬ファイルが壊れている・形式が不正なときに送出する。"""
+
+
 def rewards_path(place: str, data_dir: str | Path = "data") -> Path:
     return Path(data_dir) / f"rewards_{place_slug(place)}.json"
 
@@ -84,7 +88,16 @@ class RewardStore:
         rewards: list[RewardEdge] = []
         skipped: list[RewardEdge] = []
         if path.exists():
-            raw = json.loads(path.read_text(encoding="utf-8"))
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+                raise RewardsFileError(
+                    f"報酬ファイル {path} を読み込めません（JSONが壊れています）: {exc}"
+                ) from exc
+            if not isinstance(raw, dict):
+                raise RewardsFileError(
+                    f"報酬ファイル {path} の形式が不正です（オブジェクトではありません）"
+                )
             version = raw.get("version")
             if version != FORMAT_VERSION:
                 logger.warning(
@@ -92,14 +105,19 @@ class RewardStore:
                     path, version, FORMAT_VERSION,
                 )
             for item in raw.get("rewards", []):
-                r = RewardEdge(
-                    u=item["u"],
-                    v=item["v"],
-                    key=item.get("key", 0),
-                    reward=item["reward"],
-                    memo=item.get("memo", ""),
-                    road_name=item.get("road_name", ""),
-                )
+                try:
+                    r = RewardEdge(
+                        u=item["u"],
+                        v=item["v"],
+                        key=item.get("key", 0),
+                        reward=item["reward"],
+                        memo=item.get("memo", ""),
+                        road_name=item.get("road_name", ""),
+                    )
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise RewardsFileError(
+                        f"報酬ファイル {path} に不正なエントリがあります: {item!r} ({exc})"
+                    ) from exc
                 if graph is not None and not graph.has_edge(r.u, r.v, r.key):
                     logger.warning("グラフに存在しない報酬エッジをスキップ: %s", r.edge_id)
                     skipped.append(r)

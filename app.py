@@ -19,7 +19,12 @@ def main() -> None:
     st.set_page_config(page_title="OSM報酬最大化経路探索", layout="wide")
     st.title("OSM報酬最大化経路探索")
 
-    config = load_config()
+    try:
+        config = load_config()
+    except ValueError as exc:
+        st.error(f"config.yaml の読み込みに失敗しました: {exc}")
+        st.stop()
+        return
 
     try:
         G = get_graph(config.place, config.network_type, config.data_dir)

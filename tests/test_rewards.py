@@ -4,7 +4,13 @@ from pathlib import Path
 
 import pytest
 
-from src.rewards import RewardEdge, RewardStore, normalize_edge_id, rewards_path
+from src.rewards import (
+    RewardEdge,
+    RewardsFileError,
+    RewardStore,
+    normalize_edge_id,
+    rewards_path,
+)
 
 PLACE = "Shimogyo-ku, Kyoto, Japan"
 
@@ -136,6 +142,29 @@ class TestOpen:
         store, _ = RewardStore.open(path, PLACE)
         r = store.get(1, 2, 0)
         assert (r.key, r.memo, r.road_name) == (0, "", "")
+
+    def test_corrupted_json_raises_rewards_file_error(self, tmp_path):
+        path = tmp_path / "rewards.json"
+        path.write_text("{ こわれたJSON", encoding="utf-8")
+        with pytest.raises(RewardsFileError, match="壊れて"):
+            RewardStore.open(path, PLACE)
+
+    def test_non_object_json_raises(self, tmp_path):
+        path = tmp_path / "rewards.json"
+        path.write_text("[1, 2, 3]", encoding="utf-8")
+        with pytest.raises(RewardsFileError, match="形式が不正"):
+            RewardStore.open(path, PLACE)
+
+    def test_invalid_entry_raises_with_context(self, tmp_path):
+        path = tmp_path / "rewards.json"
+        path.write_text(
+            json.dumps(
+                {"version": 1, "place": PLACE, "rewards": [{"u": 1, "v": 2}]}
+            ),
+            encoding="utf-8",
+        )
+        with pytest.raises(RewardsFileError, match="不正なエントリ"):
+            RewardStore.open(path, PLACE)
 
     def test_skips_edges_missing_from_graph(self, tmp_path, undirected_graph, caplog):
         """SPEC §6.1: グラフに存在しないエッジは警告を出してスキップ。"""

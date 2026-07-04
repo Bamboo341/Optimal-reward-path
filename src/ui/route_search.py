@@ -13,8 +13,10 @@ import streamlit as st
 from streamlit_folium import st_folium
 
 from src.config import Config
+from src.export import export_candidates
 from src.graph_loader import nearest_node
-from src.rewards import RewardStore, rewards_path
+from src.rewards import RewardsFileError, RewardStore, rewards_path
+from src.route import RouteError
 from src.solver import SolverError, solve
 from src.ui.map_view import ROUTE_COLORS, build_route_map
 
@@ -29,9 +31,13 @@ _ZOOM_KEY = "route_map_zoom"
 def render(G: nx.MultiGraph, config: Config) -> None:
     st.header("経路探索")
 
-    store, _ = RewardStore.open(
-        rewards_path(config.place, config.data_dir), config.place, graph=G
-    )
+    try:
+        store, _ = RewardStore.open(
+            rewards_path(config.place, config.data_dir), config.place, graph=G
+        )
+    except RewardsFileError as exc:
+        st.error(f"{exc}\n\nファイルを修正または削除してから再読み込みしてください。")
+        return
     s = st.session_state.get(_S_KEY)
     t = st.session_state.get(_T_KEY)
 
@@ -82,6 +88,7 @@ def render(G: nx.MultiGraph, config: Config) -> None:
     _handle_map_interaction(G, out, target)
 
     _render_result_table(candidates, st.session_state.get(_LIMIT_KEY))
+    _render_export_button(G, candidates, config)
 
 
 def _run_search(G, store, s, t, limit, k, mode, config) -> None:
@@ -99,7 +106,7 @@ def _run_search(G, store, s, t, limit, k, mode, config) -> None:
                 mode=mode,
                 time_limit_sec=config.time_limit_sec,
             )
-    except SolverError as exc:
+    except (SolverError, RouteError) as exc:
         st.session_state[_RESULT_KEY] = []
         st.session_state[_LIMIT_KEY] = None
         st.error(str(exc))
@@ -155,3 +162,15 @@ def _render_result_table(candidates, limit) -> None:
         )
         + "（レイヤーコントロールで表示/非表示を切替できます）"
     )
+
+
+def _render_export_button(G, candidates, config) -> None:
+    if not candidates:
+        return
+    if st.button("GeoJSONエクスポート（output/ に保存）"):
+        try:
+            path = export_candidates(G, candidates, config.output_dir)
+        except OSError as exc:
+            st.error(f"エクスポートに失敗しました: {exc}")
+        else:
+            st.success(f"エクスポートしました: {path}")
