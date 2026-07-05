@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 import re
+import weakref
 from pathlib import Path
 
 import networkx as nx
@@ -77,9 +78,60 @@ def nearest_node(G: nx.MultiGraph, lat: float, lng: float) -> int:
     return int(nodes[int(np.argmin(d2))])
 
 
+# グラフごとのエッジ空間インデックス。グラフは読込後不変とみなす
+_EDGE_INDEX_CACHE: "weakref.WeakKeyDictionary[nx.MultiGraph, tuple]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _edge_spatial_index(G: nx.MultiGraph):
+    """cos(緯度) 補正した平面での全エッジ STRtree（グラフごとにキャッシュ）。"""
+    cached = _EDGE_INDEX_CACHE.get(G)
+    if cached is not None:
+        return cached
+
+    import numpy as np
+    import shapely
+    from shapely.geometry import LineString
+
+    edge_ids: list[tuple[int, int, int]] = []
+    geoms = []
+    for u, v, key, data in G.edges(keys=True, data=True):
+        geom = data.get("geometry")
+        if geom is None:
+            geom = LineString(
+                [(G.nodes[u]["x"], G.nodes[u]["y"]), (G.nodes[v]["x"], G.nodes[v]["y"])]
+            )
+        edge_ids.append((u, v, key))
+        geoms.append(geom)
+    if not edge_ids:
+        raise ValueError("グラフにエッジがありません")
+
+    ys = list(nx.get_node_attributes(G, "y").values())
+    scale = math.cos(math.radians(sum(ys) / len(ys)))
+    factor = np.array([scale, 1.0])
+    scaled = shapely.transform(
+        np.array(geoms, dtype=object), lambda coords: coords * factor
+    )
+    tree = shapely.STRtree(scaled)
+    cached = (tree, edge_ids, scale)
+    _EDGE_INDEX_CACHE[G] = cached
+    return cached
+
+
 def nearest_edge(G: nx.MultiGraph, lat: float, lng: float) -> tuple[int, int, int]:
-    """地点 (lat, lng) の最近傍エッジを u < v 正規化した (u, v, key) で返す（SPEC §7.1）。"""
-    u, v, key = ox.distance.nearest_edges(G, X=lng, Y=lat)
+    """地点 (lat, lng) の最近傍エッジを u < v 正規化した (u, v, key) で返す（SPEC §7.1）。
+
+    経度を cos(緯度) で補正した平面上でエッジ形状との最近傍を取る。
+    度数空間のまま比較する ox.distance.nearest_edges では東西方向の距離が
+    2割ほど過大評価され（緯度35度）、交差点付近でクリックと違うエッジが
+    選ばれることがあるための変更。
+    """
+    from shapely.geometry import Point
+
+    tree, edge_ids, scale = _edge_spatial_index(G)
+    idx = int(tree.nearest(Point(lng * scale, lat)))
+    u, v, key = edge_ids[idx]
     return (int(u), int(v), int(key)) if u <= v else (int(v), int(u), int(key))
 
 

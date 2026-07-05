@@ -1,27 +1,27 @@
 """報酬設定画面（SPEC.md §7.1）。
 
 操作フロー:
-1. 地図上の任意点をクリック
+1. 地図上の任意点をクリック（クリック位置に小さな丸を表示）
 2. 最近傍エッジを青色でプレビュー表示し、道路名をサイドバーに表示
 3. サイドバーで報酬値（正整数）とメモを入力し「設定」で即時JSON保存
 
 設定済みエッジの一覧・個別削除・報酬値の変更も本画面で行う。
+選択可能な道路はグレーの下敷きとして表示できる（誤クリック対策）。
 """
 
 from __future__ import annotations
 
 import networkx as nx
 import streamlit as st
-from streamlit_folium import st_folium
 
 from src.config import Config
 from src.graph_loader import edge_road_name, nearest_edge
 from src.rewards import RewardsFileError, RewardStore, rewards_path
-from src.ui.map_view import build_reward_map, graph_center
+from src.ui.map_state import new_click, render_map
+from src.ui.map_view import MAX_OVERLAY_EDGES, reward_feature_group
 
 _PREVIEW_KEY = "reward_preview_edge"
-_CENTER_KEY = "reward_map_center"
-_ZOOM_KEY = "reward_map_zoom"
+_CLICK_KEY = "reward_clicked_latlng"
 
 
 def render(G: nx.MultiGraph, config: Config) -> None:
@@ -40,44 +40,41 @@ def render(G: nx.MultiGraph, config: Config) -> None:
             f"グラフに存在しない報酬エッジ {len(skipped)} 件をスキップしました: {ids}"
         )
 
-    preview = st.session_state.get(_PREVIEW_KEY)
+    overlay_allowed = G.number_of_edges() <= MAX_OVERLAY_EDGES
+    show_roads = st.checkbox(
+        "選択可能な道路をグレーで表示",
+        value=overlay_allowed,
+        disabled=not overlay_allowed,
+        help="クリックで選択できる道路の位置が分かります",
+    )
+    if not overlay_allowed:
+        st.caption(
+            f"エッジ数が多いため下敷き表示は無効です"
+            f"（{G.number_of_edges():,} > {MAX_OVERLAY_EDGES:,}）"
+        )
 
-    m = build_reward_map(
+    preview = st.session_state.get(_PREVIEW_KEY)
+    fg = reward_feature_group(
         G,
         store.all(),
         preview_edge=preview,
-        center=st.session_state.get(_CENTER_KEY),
-        zoom=st.session_state.get(_ZOOM_KEY, 15),
+        clicked=st.session_state.get(_CLICK_KEY),
     )
-    out = st_folium(
-        m,
-        height=560,
-        use_container_width=True,
-        key="reward_map",
-        returned_objects=["last_clicked", "center", "zoom"],
-    )
+    out = render_map(G, fg, key="reward_map", selectable_overlay=show_roads)
 
-    _handle_map_interaction(G, out, preview)
+    _handle_click(G, out)
     _render_sidebar_form(G, store, preview)
     _render_reward_list(store)
 
 
-def _handle_map_interaction(G: nx.MultiGraph, out: dict | None, preview) -> None:
-    """クリック位置から最近傍エッジを特定し、表示位置を記憶する。"""
-    if not out:
+def _handle_click(G: nx.MultiGraph, out: dict | None) -> None:
+    """新しいクリックのみ処理する（他のウィジェット操作の再実行では反応しない）。"""
+    latlng = new_click(out, "reward")
+    if latlng is None:
         return
-    center = out.get("center")
-    if center:
-        st.session_state[_CENTER_KEY] = (center["lat"], center["lng"])
-    if out.get("zoom"):
-        st.session_state[_ZOOM_KEY] = out["zoom"]
-
-    clicked = out.get("last_clicked")
-    if clicked:
-        edge = nearest_edge(G, lat=clicked["lat"], lng=clicked["lng"])
-        if edge != preview:
-            st.session_state[_PREVIEW_KEY] = edge
-            st.rerun()
+    st.session_state[_CLICK_KEY] = latlng
+    st.session_state[_PREVIEW_KEY] = nearest_edge(G, lat=latlng[0], lng=latlng[1])
+    st.rerun()
 
 
 def _render_sidebar_form(G: nx.MultiGraph, store: RewardStore, preview) -> None:

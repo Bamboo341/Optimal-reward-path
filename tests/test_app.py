@@ -92,6 +92,8 @@ def test_geojson_export_from_route_page(patched_graph, monkeypatch, tmp_path):
     at.run()
     search = next(b for b in at.sidebar.button if "探索実行" in str(b.label))
     search.click().run()
+    # 探索後は「地図に表示する候補」の選択ラジオが表示される
+    assert any("表示する候補" in str(r.label) for r in at.main.radio)
     export = next(b for b in at.main.button if "GeoJSON" in str(b.label))
     export.click().run()
 

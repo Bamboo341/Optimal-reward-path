@@ -2,7 +2,7 @@
 
 - 出発点・到着点: 地図クリック → 最近傍ノードにスナップ（マーカー表示）
 - 距離上限 L・モード・候補数 K を指定して探索実行
-- 候補経路を色分けして地図に重畳し、候補ごとの表を表示
+- 候補経路は選択した1件のみ地図に表示する（「すべて表示」も選択可能）
 """
 
 from __future__ import annotations
@@ -10,7 +10,6 @@ from __future__ import annotations
 import networkx as nx
 import pandas as pd
 import streamlit as st
-from streamlit_folium import st_folium
 
 from src.config import Config
 from src.export import export_candidates
@@ -18,14 +17,13 @@ from src.graph_loader import nearest_node
 from src.rewards import RewardsFileError, RewardStore, rewards_path
 from src.route import RouteError
 from src.solver import SolverError, solve
-from src.ui.map_view import ROUTE_COLORS, build_route_map
+from src.ui.map_state import new_click, render_map
+from src.ui.map_view import route_feature_group
 
 _S_KEY = "route_start_node"
 _T_KEY = "route_end_node"
 _RESULT_KEY = "route_candidates"
 _LIMIT_KEY = "route_limit_used"
-_CENTER_KEY = "route_map_center"
-_ZOOM_KEY = "route_map_zoom"
 
 
 def render(G: nx.MultiGraph, config: Config) -> None:
@@ -69,25 +67,15 @@ def render(G: nx.MultiGraph, config: Config) -> None:
         _run_search(G, store, s, t, float(limit), int(k), mode, config)
 
     candidates = st.session_state.get(_RESULT_KEY, [])
-    m = build_route_map(
-        G,
-        store.all(),
-        s=s,
-        t=t,
-        candidates=candidates,
-        center=st.session_state.get(_CENTER_KEY),
-        zoom=st.session_state.get(_ZOOM_KEY, 15),
+    visible = _render_candidate_picker(candidates)
+
+    fg = route_feature_group(
+        G, store.all(), s=s, t=t, candidates=candidates, visible=visible
     )
-    out = st_folium(
-        m,
-        height=560,
-        use_container_width=True,
-        key="route_map",
-        returned_objects=["last_clicked", "center", "zoom"],
-    )
+    out = render_map(G, fg, key="route_map")
     _handle_map_interaction(G, out, target)
 
-    _render_result_table(candidates, st.session_state.get(_LIMIT_KEY))
+    _render_result_table(candidates, st.session_state.get(_LIMIT_KEY), visible)
     _render_export_button(G, candidates, config)
 
 
@@ -115,26 +103,33 @@ def _run_search(G, store, s, t, limit, k, mode, config) -> None:
     st.session_state[_LIMIT_KEY] = limit
 
 
+def _render_candidate_picker(candidates) -> set[int] | None:
+    """地図に表示する候補を選ぶ。返り値は候補 index の集合（None は全候補）。"""
+    if not candidates:
+        return None
+    labels = [
+        f"候補{i + 1}（報酬{c.reward} / {c.length:.0f}m）"
+        for i, c in enumerate(candidates)
+    ]
+    options = labels + ["すべて表示"] if len(candidates) > 1 else labels
+    choice = st.radio("地図に表示する候補", options, horizontal=True)
+    if choice == "すべて表示":
+        return None
+    return {options.index(choice)}
+
+
 def _handle_map_interaction(G, out, target: str) -> None:
-    if not out:
+    """新しいクリックのみ処理する（古いクリックの再適用を防ぐ）。"""
+    latlng = new_click(out, "route")
+    if latlng is None:
         return
-    center = out.get("center")
-    if center:
-        st.session_state[_CENTER_KEY] = (center["lat"], center["lng"])
-    if out.get("zoom"):
-        st.session_state[_ZOOM_KEY] = out["zoom"]
-
-    clicked = out.get("last_clicked")
-    if not clicked:
-        return
-    node = nearest_node(G, lat=clicked["lat"], lng=clicked["lng"])
+    node = nearest_node(G, lat=latlng[0], lng=latlng[1])
     key = _S_KEY if target == "出発点" else _T_KEY
-    if st.session_state.get(key) != node:
-        st.session_state[key] = node
-        st.rerun()
+    st.session_state[key] = node
+    st.rerun()
 
 
-def _render_result_table(candidates, limit) -> None:
+def _render_result_table(candidates, limit, visible: set[int] | None) -> None:
     if not candidates:
         st.caption(
             "出発点・到着点を設定して「探索実行」を押すと、候補経路を表示します。"
@@ -144,9 +139,11 @@ def _render_result_table(candidates, limit) -> None:
     st.subheader(f"候補経路（{len(candidates)}件）")
     rows = []
     for i, c in enumerate(candidates):
+        shown = visible is None or i in visible
         rows.append(
             {
                 "候補": f"候補{i + 1}",
+                "地図表示": "表示中" if shown else "",
                 "総報酬": c.reward,
                 "総距離 (m)": round(c.length, 1),
                 "距離上限使用率 (%)": round(c.length / limit * 100, 1) if limit else None,
@@ -154,14 +151,6 @@ def _render_result_table(candidates, limit) -> None:
             }
         )
     st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
-    st.caption(
-        "地図の色: "
-        + " / ".join(
-            f"候補{i + 1}={ROUTE_COLORS[i % len(ROUTE_COLORS)]}"
-            for i in range(len(candidates))
-        )
-        + "（レイヤーコントロールで表示/非表示を切替できます）"
-    )
 
 
 def _render_export_button(G, candidates, config) -> None:

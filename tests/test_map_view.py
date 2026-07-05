@@ -2,11 +2,23 @@ import folium
 import pytest
 
 from src.rewards import RewardEdge
-from src.ui.map_view import build_reward_map, edge_latlngs, graph_center
+from src.solver import solve
+from src.ui.map_view import (
+    create_base_map,
+    edges_geojson,
+    graph_center,
+    reward_feature_group,
+    route_feature_group,
+)
+from tests.test_solver import grid_graph, reward
 
 
-def _polylines(m: folium.Map) -> list[folium.PolyLine]:
-    return [c for c in m._children.values() if isinstance(c, folium.PolyLine)]
+def _polylines(fg) -> list[folium.PolyLine]:
+    return [c for c in fg._children.values() if isinstance(c, folium.PolyLine)]
+
+
+def _markers(fg) -> list[folium.Marker]:
+    return [c for c in fg._children.values() if type(c) is folium.Marker]
 
 
 def test_graph_center(undirected_graph):
@@ -15,43 +27,35 @@ def test_graph_center(undirected_graph):
     assert lng == pytest.approx(135.7585)
 
 
-class TestEdgeLatLngs:
-    def test_straight_line_without_geometry(self):
-        # geometry 属性がないエッジは両端ノードを結ぶ直線
-        import networkx as nx
+class TestBaseMap:
+    def test_without_overlay_has_no_geojson(self, undirected_graph):
+        m = create_base_map(undirected_graph)
+        assert not any(
+            isinstance(c, folium.GeoJson) for c in m._children.values()
+        )
 
-        G = nx.MultiGraph(crs="epsg:4326")
-        G.add_node(1, x=135.758, y=34.990)
-        G.add_node(2, x=135.759, y=34.990)
-        G.add_edge(1, 2, key=0, length=100.0)
-        assert edge_latlngs(G, 1, 2, 0) == [(34.990, 135.758), (34.990, 135.759)]
+    def test_with_overlay_adds_geojson(self, undirected_graph):
+        m = create_base_map(undirected_graph, selectable_overlay=True)
+        assert any(isinstance(c, folium.GeoJson) for c in m._children.values())
 
-    def test_undirected_conversion_fills_geometry(self, undirected_graph):
-        # ox.convert.to_undirected は全エッジに geometry を付与する（向きは元エッジ基準）
-        coords = edge_latlngs(undirected_graph, 1, 2, 0)
-        assert sorted(coords) == [(34.990, 135.758), (34.990, 135.759)]
-
-    def test_uses_geometry_when_present(self, undirected_graph):
-        coords = edge_latlngs(undirected_graph, 3, 4, 0)
-        # geometry の (lng, lat) 座標列が (lat, lng) に変換される
-        assert len(coords) == 3
-        assert coords[0] in [(34.991, 135.759), (34.991, 135.758)]
-        assert coords[1] == (34.9912, 135.7585)
-
-    def test_missing_edge_raises(self, undirected_graph):
-        with pytest.raises(KeyError):
-            edge_latlngs(undirected_graph, 1, 3, 0)
+    def test_edges_geojson_covers_all_edges(self, undirected_graph):
+        gj = edges_geojson(undirected_graph)
+        assert gj["type"] == "FeatureCollection"
+        assert len(gj["features"]) == undirected_graph.number_of_edges()
+        # 座標は (経度, 緯度) 順
+        lng, lat = gj["features"][0]["geometry"]["coordinates"][0]
+        assert 135 < lng < 136 and 34 < lat < 35
 
 
-class TestBuildRewardMap:
+class TestRewardFeatureGroup:
     def test_draws_reward_edges_red_with_tooltip(self, undirected_graph):
         rewards = [
             RewardEdge(u=1, v=2, key=0, reward=50, road_name="四条通"),
             RewardEdge(u=2, v=3, key=0, reward=30),
         ]
-        m = build_reward_map(undirected_graph, rewards)
+        fg = reward_feature_group(undirected_graph, rewards)
 
-        lines = _polylines(m)
+        lines = _polylines(fg)
         assert len(lines) == 2
         assert all(line.options["color"] == "red" for line in lines)
         tooltips = " ".join(
@@ -64,11 +68,51 @@ class TestBuildRewardMap:
         assert "報酬: 30" in tooltips
 
     def test_preview_edge_is_blue(self, undirected_graph):
-        m = build_reward_map(undirected_graph, [], preview_edge=(1, 4, 0))
-        lines = _polylines(m)
+        fg = reward_feature_group(undirected_graph, [], preview_edge=(1, 4, 0))
+        lines = _polylines(fg)
         assert len(lines) == 1
         assert lines[0].options["color"] == "blue"
 
-    def test_empty_map_has_no_polylines(self, undirected_graph):
-        m = build_reward_map(undirected_graph, [])
-        assert _polylines(m) == []
+    def test_clicked_point_marker(self, undirected_graph):
+        fg = reward_feature_group(undirected_graph, [], clicked=(34.9905, 135.7585))
+        assert any(
+            isinstance(c, folium.CircleMarker) for c in fg._children.values()
+        )
+
+    def test_empty(self, undirected_graph):
+        fg = reward_feature_group(undirected_graph, [])
+        assert _polylines(fg) == []
+
+
+class TestRouteFeatureGroup:
+    @pytest.fixture
+    def searched(self):
+        G = grid_graph(5)
+        rewards = [reward(0, 1, 10), reward(6, 11, 25), reward(17, 18, 40)]
+        cands = solve(G, rewards, s=0, t=24, limit=1400.0, k=3)
+        return G, rewards, cands
+
+    def test_markers_for_start_and_end(self, searched):
+        G, rewards, cands = searched
+        fg = route_feature_group(G, [], s=0, t=24)
+        assert len(_markers(fg)) == 2
+
+    def test_visible_selects_single_candidate(self, searched):
+        G, rewards, cands = searched
+        n_rewards = len(rewards)
+
+        fg_one = route_feature_group(G, rewards, candidates=cands, visible={1})
+        lines = _polylines(fg_one)
+        # 報酬エッジ + 選択した候補1本のみ
+        assert len(lines) == n_rewards + 1
+        route_lines = [l for l in lines if l.options["color"] != "red"]
+        assert len(route_lines) == 1
+        assert route_lines[0].options["color"] == "#2ca02c"  # 候補2の色
+
+    def test_visible_none_draws_all(self, searched):
+        G, rewards, cands = searched
+        fg_all = route_feature_group(G, rewards, candidates=cands, visible=None)
+        route_lines = [
+            l for l in _polylines(fg_all) if l.options["color"] != "red"
+        ]
+        assert len(route_lines) == len(cands)

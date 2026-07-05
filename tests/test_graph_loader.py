@@ -123,6 +123,25 @@ class TestNearestEdge:
         assert (u, v, key) == (1, 4, 0)
         assert all(type(x) is int for x in (u, v, key))
 
+    def test_latitude_scaling_prevents_wrong_pick(self):
+        """度数空間のままだと東西距離が過大評価され、違うエッジが選ばれる配置。
+
+        クリック地点から西 0.0010°（実距離 約91m）に南北の道路A、
+        北 0.0009°（実距離 約100m）に東西の道路Bがある。実距離では A が
+        最近傍だが、度数のままでは 0.0010 > 0.0009 で B が選ばれてしまう。
+        """
+        import networkx as nx
+
+        G = nx.MultiGraph(crs="epsg:4326")
+        G.add_node(1, x=135.7580, y=34.9900)
+        G.add_node(2, x=135.7580, y=34.9920)  # 道路A（南北）
+        G.add_node(3, x=135.7580, y=34.9919)
+        G.add_node(4, x=135.7600, y=34.9919)  # 道路B（東西）
+        G.add_edge(1, 2, key=0, length=222.0)
+        G.add_edge(3, 4, key=0, length=183.0)
+
+        assert nearest_edge(G, lat=34.9910, lng=135.7590) == (1, 2, 0)
+
 
 class TestNearestNode:
     def test_snaps_to_closest_node(self, undirected_graph):
